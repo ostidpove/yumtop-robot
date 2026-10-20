@@ -1,0 +1,49 @@
+name: Robot YumTop
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # toutes les 10 minutes (GitHub peut retarder de quelques minutes)
+  workflow_dispatch:          # lancé par Supabase dès qu'une région est demandée, ou à la main (« Run workflow »)
+    inputs:
+      preload:
+        description: 'Précharger une province entière (code de 2 lettres, ex. QC) — laisser vide sinon'
+        required: false
+        default: ''
+
+concurrency:
+  group: robot
+  cancel-in-progress: false
+
+permissions:
+  contents: write             # seulement pour la petite mise à jour mensuelle qui garde le robot actif
+
+jobs:
+  robot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install --no-audit --no-fund
+      - run: node robot.mjs
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          FSQ_TOKEN: ${{ secrets.FSQ_TOKEN }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          SUGGEST_EMAIL: ${{ secrets.SUGGEST_EMAIL }}
+          PRELOAD: ${{ inputs.preload }}
+      # GitHub met en pause les tâches automatiques d'un dépôt sans activité depuis 60 jours :
+      # une fois par mois, le robot écrit la date dans un petit fichier pour rester actif.
+      - name: Garder le robot actif
+        run: |
+          last=$(git log -1 --format=%ct); now=$(date +%s)
+          if [ $((now - last)) -gt 2592000 ]; then
+            date -u > .actif
+            git config user.name "yumtop-robot"
+            git config user.email "robot@users.noreply.github.com"
+            git add .actif && git commit -m "Robot actif" && git push
+          fi
