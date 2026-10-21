@@ -148,21 +148,29 @@ async function main() {
   }
   if (photos?.length) console.log(`${photos.length} photo(s) analysée(s)`);
 
-  // ---------- 4 : suggestions de langue par courriel ----------
+  // ---------- 4 : suggestions (langues et idées de plats) par courriel ----------
   const resendKey = env('RESEND_API_KEY', false), to = env('SUGGEST_EMAIL', false);
   if (resendKey && to) {
-    const { data: sug, error: e4 } = await db.from('language_suggestions').select('id, language, created_at').is('emailed_at', null).order('created_at').limit(200);
+    const when = (d) => new Date(d).toLocaleString('fr-CA', { timeZone: 'America/Toronto' });
+    const { data: langs, error: e4 } = await db.from('language_suggestions').select('id, language, created_at').is('emailed_at', null).order('created_at').limit(200);
     if (e4) throw e4;
-    if (sug?.length) {
-      const lines = sug.map((s) => `• ${s.language}  (${new Date(s.created_at).toLocaleString('fr-CA', { timeZone: 'America/Toronto' })})`).join('\n');
+    const { data: ideas, error: e5 } = await db.from('dish_suggestions').select('id, idea, created_at').is('emailed_at', null).order('created_at').limit(200);
+    if (e5) throw e5;
+    const nL = langs?.length ?? 0, nI = ideas?.length ?? 0;
+    if (nL + nI > 0) {
+      const parts = [];
+      if (nI) parts.push(`Idées de plats (${nI}) :\n` + ideas.map((x) => `• ${x.idea}  (${when(x.created_at)})`).join('\n'));
+      if (nL) parts.push(`Langues suggérées (${nL}) :\n` + langs.map((x) => `• ${x.language}  (${when(x.created_at)})`).join('\n'));
+      const subject = ['YumTop :', nI ? `${nI} idée(s) de plat` : '', nI && nL ? 'et' : '', nL ? `${nL} suggestion(s) de langue` : ''].filter(Boolean).join(' ');
       const res = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: 'YumTop <onboarding@resend.dev>', to: [to], subject: `YumTop : ${sug.length} suggestion(s) de langue`, text: `Nouvelles suggestions de langue dans YumTop :\n\n${lines}\n` })
+        body: JSON.stringify({ from: 'YumTop <onboarding@resend.dev>', to: [to], subject, text: parts.join('\n\n') + '\n' })
       });
       if (!res.ok) throw new Error(`Courriel refusé (${res.status}) : ${(await res.text()).slice(0, 200)}`);
-      await db.from('language_suggestions').update({ emailed_at: nowIso }).in('id', sug.map((s) => s.id));
-      console.log(`${sug.length} suggestion(s) envoyée(s) par courriel`);
+      if (nL) await db.from('language_suggestions').update({ emailed_at: nowIso }).in('id', langs.map((x) => x.id));
+      if (nI) await db.from('dish_suggestions').update({ emailed_at: nowIso }).in('id', ideas.map((x) => x.id));
+      console.log(`Courriel envoyé : ${nI} idée(s) de plat, ${nL} langue(s)`);
     }
   }
   console.log('Passage terminé.');
